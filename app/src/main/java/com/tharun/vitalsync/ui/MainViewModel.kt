@@ -25,8 +25,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _userId = MutableStateFlow<String?>(null)
     private val _userName = MutableStateFlow("User")
 
-    private val _historyState = MutableStateFlow<List<HealthData>>(emptyList())
-    val historyState: StateFlow<List<HealthData>> = _historyState
+    // For History Screen
+    private val _historyQuery = MutableStateFlow<Pair<MetricType, String>?>(null)
 
     val state: StateFlow<DashboardState> = _userId.flatMapLatest { userId ->
         if (userId != null) {
@@ -55,6 +55,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardState())
 
+    val historyState: StateFlow<List<HealthData>> = _historyQuery
+        .filterNotNull()
+        .combine(_userId.filterNotNull()) { query, userId ->
+            val (metricType, timeRange) = query
+            val now = System.currentTimeMillis()
+            val startTime = when (timeRange) {
+                "Today" -> now - TimeUnit.DAYS.toMillis(1)
+                "7 Days" -> now - TimeUnit.DAYS.toMillis(7)
+                "30 Days" -> now - TimeUnit.DAYS.toMillis(30)
+                else -> now - TimeUnit.DAYS.toMillis(1)
+            }
+
+            // In a separate coroutine, trigger a sync from the network. This won't block the UI.
+            viewModelScope.launch {
+                try {
+                    repository.syncHistoricalData(userId, startTime, now, metricType)
+                } catch (e: Exception) {
+                    Log.e("MainViewModel", "Failed to sync history for $metricType", e)
+                }
+            }
+
+            // Immediately return the flow that observes the database.
+            repository.getHealthDataForRange(userId, startTime, now)
+        }
+        .flatMapLatest { it } // Flatten the Flow<Flow<List<HealthData>>> to Flow<List<HealthData>>
+        .map {
+            val metricType = _historyQuery.value?.first
+            if (metricType == null) return@map emptyList<HealthData>()
+            
+            // Filter the data from the DB before showing it, removing entries where the specific metric is null
+            it.filter {
+                when (metricType) {
+                    MetricType.HEART_RATE -> it.heartRate != null
+                    MetricType.STEPS -> it.steps != null
+                    MetricType.CALORIES -> it.calories != null
+                    MetricType.DISTANCE -> it.distance != null
+                    MetricType.SLEEP -> it.sleepDuration != null
+                    MetricType.HEART_POINTS -> false // Heart points are disabled
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+
     fun setUserIdAndName(userId: String, userName: String?) {
         _userId.value = userId
         _userName.value = userName?.split(" ")?.first() ?: "User"
@@ -69,41 +113,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadHistory(metricType: MetricType, timeRange: String) {
-        _userId.value?.let { userId ->
-            val now = System.currentTimeMillis()
-            val startTime = when (timeRange) {
-                "Today" -> now - TimeUnit.DAYS.toMillis(1)
-                "7 Days" -> now - TimeUnit.DAYS.toMillis(7)
-                "30 Days" -> now - TimeUnit.DAYS.toMillis(30)
-                else -> now - TimeUnit.DAYS.toMillis(1)
-            }
-
-            // Observe the database for changes
-            viewModelScope.launch {
-                repository.getHealthDataForRange(userId, startTime, now).collect { databaseData ->
-                    val filteredData = databaseData.filter {
-                        when (metricType) {
-                            MetricType.HEART_RATE -> it.heartRate != null
-                            MetricType.STEPS -> it.steps != null
-                            MetricType.CALORIES -> it.calories != null
-                            MetricType.DISTANCE -> it.distance != null
-                            MetricType.SLEEP -> it.sleepDuration != null
-                            MetricType.HEART_POINTS -> false // Heart points are disabled
-                        }
-                    }
-                    _historyState.value = filteredData
-                }
-            }
-
-            // Trigger a background sync from the network
-            viewModelScope.launch {
-                try {
-                    repository.syncHistoricalData(userId, startTime, now, metricType)
-                } catch (e: Exception) {
-                    Log.e("MainViewModel", "Failed to sync history for $metricType", e)
-                }
-            }
-        }
+        _historyQuery.value = metricType to timeRange
     }
 
     private fun getWeeklyData(data: List<HealthData>, format: String, valueSelector: (HealthData) -> Float): List<Pair<String, Float>> {

@@ -16,12 +16,26 @@ class HealthDataRepository(private val healthDataDao: HealthDataDao, private val
     }
 
     /**
-     * Fetches historical data from Google Fit and stores it in the local database.
+     * Fetches historical data from Google Fit, merges it with existing data, and stores it in the local database.
      */
     suspend fun syncHistoricalData(userId: String, startTime: Long, endTime: Long, metricType: MetricType) {
         val historicalData = googleFitManager.readHistoricalData(startTime, endTime, metricType)
-        historicalData.forEach { healthData ->
-            healthDataDao.insert(healthData.copy(userId = userId))
+        historicalData.forEach { newData ->
+            val existingData = healthDataDao.getHealthDataByTimestamp(userId, newData.timestamp)
+            val mergedData = if (existingData != null) {
+                // Merge new data into the existing record
+                existingData.copy(
+                    heartRate = newData.heartRate ?: existingData.heartRate,
+                    steps = newData.steps ?: existingData.steps,
+                    calories = newData.calories ?: existingData.calories,
+                    distance = newData.distance ?: existingData.distance,
+                    sleepDuration = newData.sleepDuration ?: existingData.sleepDuration
+                )
+            } else {
+                // This is a completely new data point for this timestamp
+                newData.copy(userId = userId)
+            }
+            healthDataDao.insert(mergedData)
         }
     }
 
