@@ -40,6 +40,7 @@ import com.tharun.vitalsync.data.HealthData
 import com.tharun.vitalsync.ui.theme.rememberChartStyle
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,7 +120,7 @@ fun MetricHistoryScreen(
                     }
                 }
                 MetricType.STEPS -> {
-                    if (stepsHistory.totalSteps == 0 && stepsHistory.intervalData.isEmpty()) {
+                    if (stepsHistory.totalSteps == 0 && stepsHistory.chartData.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("No step data available for this period.")
                         }
@@ -130,11 +131,11 @@ fun MetricHistoryScreen(
                                 Spacer(modifier = Modifier.height(16.dp))
                             }
                             item {
-                                if (stepsHistory.intervalData.isNotEmpty()) {
-                                    StepsBarChart(stepsHistory.intervalData)
+                                if (stepsHistory.chartData.isNotEmpty()) {
+                                    StepsBarChart(stepsHistory.chartData)
                                 }
                             }
-                            items(stepsHistory.intervalData) {
+                            items(stepsHistory.listData) {
                                 data ->
                                 Row(modifier = Modifier
                                     .fillMaxWidth()
@@ -348,18 +349,24 @@ fun HourlyHeartRateChart(hourlyData: List<HourlyHeartRateData>) {
 }
 
 @Composable
-fun StepsBarChart(intervalData: List<HealthData>) {
+fun StepsBarChart(chartData: List<HealthData>) {
     val chartModelProducer = ChartEntryModelProducer(
-        intervalData.mapIndexed { index, data ->
+        chartData.mapIndexed { index, data ->
             entryOf(index.toFloat(), data.steps?.toFloat() ?: 0f)
         }
     )
 
     val bottomAxisValueFormatter = AxisValueFormatter<AxisPosition.Horizontal.Bottom> { value, _ ->
         try {
-            val dataPoint = intervalData[value.toInt()]
-            SimpleDateFormat("h a", Locale.getDefault()).format(Date(dataPoint.timestamp))
-        } catch (_: IndexOutOfBoundsException) {
+            val dataPoint = chartData[value.toInt()]
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = dataPoint.timestamp
+            if (cal.get(Calendar.MINUTE) == 0) {
+                SimpleDateFormat("h a", Locale.getDefault()).format(Date(dataPoint.timestamp))
+            } else {
+                ""
+            }
+        } catch (_: Exception) {
             ""
         }
     }
@@ -375,7 +382,7 @@ fun StepsBarChart(intervalData: List<HealthData>) {
                             LineComponent(
                                 color = Color(0xFF4361EE).toArgb(), // Blue color
                                 thicknessDp = 8f,
-                                shape = Shapes.roundedCornerShape(topLeftPercent = 50, topRightPercent = 50)
+                                shape = Shapes.roundedCornerShape(topRightPercent = 50, topLeftPercent = 50)
                             )
                         )
                     ),

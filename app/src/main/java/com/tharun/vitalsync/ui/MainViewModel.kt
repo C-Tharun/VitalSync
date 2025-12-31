@@ -61,23 +61,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val (metricType, selectedDate) = query
             val cal = Calendar.getInstance()
             cal.timeInMillis = selectedDate
+
+            val isToday = Calendar.getInstance().get(Calendar.DAY_OF_YEAR) == cal.get(Calendar.DAY_OF_YEAR) &&
+                    Calendar.getInstance().get(Calendar.YEAR) == cal.get(Calendar.YEAR)
+
             cal.set(Calendar.HOUR_OF_DAY, 0)
             cal.set(Calendar.MINUTE, 0)
             cal.set(Calendar.SECOND, 0)
             cal.set(Calendar.MILLISECOND, 0)
             val startTime = cal.timeInMillis
-            cal.add(Calendar.DATE, 1)
-            val endTime = cal.timeInMillis
 
-            viewModelScope.launch {
+            val endTime = if (isToday) {
+                System.currentTimeMillis()
+            } else {
+                cal.add(Calendar.DATE, 1)
+                cal.timeInMillis
+            }
+
+            flow {
                 try {
                     repository.syncHistoricalData(userId, startTime, endTime, metricType)
+                    if (metricType != MetricType.ACTIVITY) {
+                        repository.syncHistoricalData(userId, startTime, endTime, MetricType.ACTIVITY)
+                    }
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to sync history for $metricType", e)
                 }
+                emitAll(repository.getHealthDataForRange(userId, startTime, endTime))
             }
-
-            repository.getHealthDataForRange(userId, startTime, endTime)
         }
         .flatMapLatest { it }
 
@@ -123,25 +134,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val stepsHistory: StateFlow<StepsHistoryState> = rawHistoryDataFlow
         .map { data ->
-            if (_historyQuery.value?.first != MetricType.STEPS) return@map StepsHistoryState()
+            val metricType = _historyQuery.value?.first
+            if (metricType != MetricType.STEPS) return@map StepsHistoryState()
 
             val filteredData = data.filter { it.steps != null }
-
-            if (filteredData.isEmpty()) {
-                return@map StepsHistoryState()
-            }
-
             val totalSteps = filteredData.sumOf { it.steps ?: 0 }
-            val intervalData = filteredData
-                .filter { it.steps != null && it.steps > 0 }
-                .sortedBy { it.timestamp }
+
+            val selectedDate = _historyQuery.value?.second ?: System.currentTimeMillis()
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = selectedDate
+            val isToday = Calendar.getInstance().get(Calendar.DAY_OF_YEAR) == cal.get(Calendar.DAY_OF_YEAR) &&
+                    Calendar.getInstance().get(Calendar.YEAR) == cal.get(Calendar.YEAR)
+
+            cal.set(Calendar.HOUR_OF_DAY, 0)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val dayStart = cal.timeInMillis
+
+            val chartData = (0 until 48).mapNotNull { index ->
+                val intervalStart = dayStart + index * 30 * 60 * 1000
+                if (isToday && intervalStart > System.currentTimeMillis()) {
+                    null
+                } else {
+                    val intervalEnd = intervalStart + 30 * 60 * 1000
+                    val stepsInInterval = filteredData.filter {
+                        it.timestamp >= intervalStart && it.timestamp < intervalEnd
+                    }.sumOf { it.steps ?: 0 }
+
+                    HealthData(
+                        userId = if (filteredData.isNotEmpty()) filteredData.first().userId else "",
+                        timestamp = intervalStart,
+                        steps = stepsInInterval,
+                        calories = null, distance = null, heartRate = null, sleepDuration = null, activityType = null, heartPoints = null
+                    )
+                }
+            }
 
             StepsHistoryState(
                 totalSteps = totalSteps,
-                intervalData = intervalData
+                chartData = chartData,
+                listData = chartData.filter { it.steps != null && it.steps > 0 }.sortedByDescending { it.timestamp }
             )
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StepsHistoryState())
+
+    val activityHistory: StateFlow<List<HealthData>> = _historyQuery
+        .filterNotNull()
+        .combine(_userId.filterNotNull()) { query, userId ->
+            val (metricType, selectedDate) = query
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = selectedDate
+
+            val isToday = Calendar.getInstance().get(Calendar.DAY_OF_YEAR) == cal.get(Calendar.DAY_OF_YEAR) &&
+                    Calendar.getInstance().get(Calendar.YEAR) == cal.get(Calendar.YEAR)
+
+            cal.set(Calendar.HOUR_OF_DAY, 0)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val startTime = cal.timeInMillis
+
+            val endTime = if (isToday) {
+                System.currentTimeMillis()
+            } else {
+                cal.add(Calendar.DATE, 1)
+                cal.timeInMillis
+            }
+
+            if (metricType == MetricType.ACTIVITY) {
+                repository.getActivityHistoryForRange(userId, startTime, endTime)
+            } else {
+                flowOf(emptyList())
+            }
+        }
+        .flatMapLatest { it }
+        .map { data ->
+            data.sortedByDescending { it.timestamp }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val historyState: StateFlow<List<HealthData>> = rawHistoryDataFlow
         .map { data ->
@@ -153,6 +224,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     MetricType.CALORIES -> it.calories != null
                     MetricType.DISTANCE -> it.distance != null
                     MetricType.SLEEP -> it.sleepDuration != null
+                    MetricType.ACTIVITY -> it.activityType != null
                     else -> false
                 }
             }
@@ -206,10 +278,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _userName.value = userName?.split(" ")?.first() ?: "User"
     }
 
-    fun syncData() {
+    fun syncTodaySummary() {
         _userId.value?.let {
             viewModelScope.launch {
                 repository.syncData(it)
+            }
+        }
+    }
+
+    fun syncAllData() {
+        _userId.value?.let {
+            viewModelScope.launch {
+                repository.syncAllDataForToday(it)
             }
         }
     }
@@ -243,7 +323,8 @@ data class HeartRateHistoryState(
 
 data class StepsHistoryState(
     val totalSteps: Int = 0,
-    val intervalData: List<HealthData> = emptyList()
+    val chartData: List<HealthData> = emptyList(),
+    val listData: List<HealthData> = emptyList()
 )
 
 data class HeartRateDailySummary(

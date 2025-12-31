@@ -3,6 +3,7 @@ package com.tharun.vitalsync.data
 import com.tharun.vitalsync.health.GoogleFitManager
 import com.tharun.vitalsync.ui.MetricType
 import kotlinx.coroutines.flow.Flow
+import java.util.Calendar
 
 class HealthDataRepository(private val healthDataDao: HealthDataDao, private val googleFitManager: GoogleFitManager) {
 
@@ -29,7 +30,8 @@ class HealthDataRepository(private val healthDataDao: HealthDataDao, private val
                     steps = newData.steps ?: existingData.steps,
                     calories = newData.calories ?: existingData.calories,
                     distance = newData.distance ?: existingData.distance,
-                    sleepDuration = newData.sleepDuration ?: existingData.sleepDuration
+                    sleepDuration = newData.sleepDuration ?: existingData.sleepDuration,
+                    activityType = newData.activityType ?: existingData.activityType
                 )
             } else {
                 // This is a completely new data point for this timestamp
@@ -44,5 +46,23 @@ class HealthDataRepository(private val healthDataDao: HealthDataDao, private val
         val todaySummary = googleFitManager.readTodaySummary()
         // Insert the complete object as a single row
         healthDataDao.insert(todaySummary.copy(userId = userId))
+    }
+
+    suspend fun syncAllDataForToday(userId: String) {
+        val cal = Calendar.getInstance()
+        val endTime = cal.timeInMillis
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val startTime = cal.timeInMillis
+
+        for (metric in MetricType.values()) {
+            syncHistoricalData(userId, startTime, endTime, metric)
+        }
+    }
+
+    fun getActivityHistoryForRange(userId: String, startTime: Long, endTime: Long): Flow<List<HealthData>> {
+        return healthDataDao.getActivityHistoryForRange(userId, startTime, endTime)
     }
 }

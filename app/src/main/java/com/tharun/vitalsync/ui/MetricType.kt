@@ -5,6 +5,7 @@ enum class MetricType {
     STEPS,
     CALORIES,
     DISTANCE,
+    SLEEP,
     HEART_POINTS,
-    SLEEP
+    ACTIVITY
 }

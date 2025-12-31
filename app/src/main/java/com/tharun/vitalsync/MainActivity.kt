@@ -47,6 +47,8 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.fitness.FitnessOptions
 import com.google.android.gms.fitness.data.DataType
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailability
 import com.patrykandpatrick.vico.compose.axis.horizontal.rememberBottomAxis
 import com.patrykandpatrick.vico.compose.axis.vertical.rememberStartAxis
 import com.patrykandpatrick.vico.compose.chart.Chart
@@ -58,6 +60,7 @@ import com.patrykandpatrick.vico.core.component.shape.LineComponent
 import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.entryOf
+import com.tharun.vitalsync.ui.ActivityHistoryScreen
 import com.tharun.vitalsync.ui.DashboardState
 import com.tharun.vitalsync.ui.MainViewModel
 import com.tharun.vitalsync.ui.MetricHistoryScreen
@@ -78,7 +81,6 @@ data class HealthMetric(
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
-
     private val fitnessOptions: FitnessOptions by lazy {
         FitnessOptions.builder()
             .addDataType(DataType.TYPE_HEART_RATE_BPM, FitnessOptions.ACCESS_READ)
@@ -93,6 +95,11 @@ class MainActivity : ComponentActivity() {
             .build()
     }
 
+    private fun isGooglePlayServicesAvailable(activity: Activity): Boolean {
+        val status = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(activity)
+        return status == ConnectionResult.SUCCESS
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -100,22 +107,27 @@ class MainActivity : ComponentActivity() {
             VitalSyncTheme {
                 val context = LocalContext.current
                 val navController = rememberNavController()
-
-                val activityPermissionLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.RequestPermission(),
-                ) { isGranted ->
-                    if (isGranted) {
-                        Log.d("MainActivity", "Activity Recognition permission granted.")
-                        viewModel.syncData()
-                    } else {
-                        Log.e("MainActivity", "Activity Recognition permission denied.")
-                    }
-                }
+                var signInError by remember { mutableStateOf<String?>(null) }
 
                 NavHost(navController = navController, startDestination = "dashboard") {
                     composable("dashboard") {
                         val state by viewModel.state.collectAsState()
                         var isSignedIn by remember { mutableStateOf(false) }
+                        var hasPermission by remember { mutableStateOf(false) }
+                        var isSyncTriggered by remember { mutableStateOf(false) }
+
+                        val activity = context as? Activity ?: (context as ContextWrapper).baseContext as Activity
+
+                        // Permission launcher callback
+                        val activityPermissionLauncher = rememberLauncherForActivityResult(
+                            contract = ActivityResultContracts.RequestPermission(),
+                        ) { isGranted ->
+                            hasPermission = isGranted
+                            if (!isGranted) {
+                                Log.e("MainActivity", "Activity Recognition permission denied.")
+                                signInError = "Activity Recognition permission denied."
+                            }
+                        }
 
                         val signInLauncher = rememberLauncherForActivityResult(
                             contract = ActivityResultContracts.StartActivityForResult()
@@ -123,24 +135,43 @@ class MainActivity : ComponentActivity() {
                             if (result.resultCode == Activity.RESULT_OK) {
                                 try {
                                     val account = GoogleSignIn.getSignedInAccountFromIntent(result.data).getResult(ApiException::class.java)
-                                    Log.d("MainActivity", "Sign-in successful for account: ${account?.email}")
+                                    if (account == null) {
+                                        signInError = "Google Sign-In failed: account is null."
+                                        isSignedIn = false
+                                        return@rememberLauncherForActivityResult
+                                    }
+                                    Log.d("MainActivity", "Sign-in successful for account: ${account.email}")
+                                    viewModel.setUserIdAndName(account.id ?: "guest", account.displayName)
                                     isSignedIn = true
-                                    viewModel.setUserIdAndName(account?.id ?: "guest", account?.displayName)
+                                    signInError = null
 
+                                    // Check permission after sign-in
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED) {
-                                            viewModel.syncData()
-                                        } else {
+                                        hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+                                        if (!hasPermission) {
                                             activityPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                                         }
                                     } else {
-                                        viewModel.syncData()
+                                        hasPermission = true
                                     }
                                 } catch (e: ApiException) {
-                                    Log.e("MainActivity", "Sign-In failed after result OK", e)
+                                    Log.e("MainActivity", "Sign-In failed after result OK, code: ${e.statusCode}", e)
+                                    isSignedIn = false
+                                    signInError = when (e.statusCode) {
+                                        10 -> "Google developer configuration error. Check OAuth client ID and SHA1."
+                                        7 -> "Network error. Please check your connection."
+                                        12501 -> "Sign-in cancelled."
+                                        else -> "Google Sign-In failed: ${e.localizedMessage} (code ${e.statusCode})"
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("MainActivity", "Sign-In failed with unexpected error", e)
+                                    isSignedIn = false
+                                    signInError = "Unexpected error during sign-in: ${e.localizedMessage}"
                                 }
                             } else {
                                 Log.e("MainActivity", "Sign-In failed with result code: ${result.resultCode}")
+                                isSignedIn = false
+                                signInError = "Sign-In failed or cancelled."
                             }
                         }
 
@@ -148,31 +179,69 @@ class MainActivity : ComponentActivity() {
                             isSignedIn = isSignedIn,
                             state = state,
                             onConnectClick = {
+                                if (!isGooglePlayServicesAvailable(activity)) {
+                                    signInError = "Google Play Services is not available or out of date."
+                                    return@AppScreen
+                                }
+                                signInError = null
                                 val signInOptions = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                                     .requestEmail()
                                     .requestId()
                                     .addExtension(fitnessOptions)
                                     .build()
-                                val activity = context as? Activity ?: (context as ContextWrapper).baseContext as Activity
                                 val googleSignInClient = GoogleSignIn.getClient(activity, signInOptions)
                                 signInLauncher.launch(googleSignInClient.signInIntent)
                             },
                             navController = navController
                         )
 
+                        // Show error message if any
+                        signInError?.let { errorMsg ->
+                            LaunchedEffect(errorMsg) {
+                                Log.e("MainActivity", "User-visible error: $errorMsg")
+                            }
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                                Text(errorMsg, color = Color.Red, modifier = Modifier.padding(16.dp))
+                            }
+                        }
+
+                        // Check for existing login and permission on launch
                         LaunchedEffect(Unit) {
+                            if (!isGooglePlayServicesAvailable(activity)) {
+                                signInError = "Google Play Services is not available or out of date."
+                                return@LaunchedEffect
+                            }
                             val account = GoogleSignIn.getAccountForExtension(context, fitnessOptions)
                             if (account != null && GoogleSignIn.hasPermissions(account, fitnessOptions)) {
                                 Log.d("MainActivity", "Permissions already granted on launch for ${account.id}")
-                                isSignedIn = true
                                 viewModel.setUserIdAndName(account.id ?: "guest", account.displayName)
-                                viewModel.syncData()
+                                isSignedIn = true
+                                signInError = null
+                                hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
+                                } else {
+                                    true
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasPermission) {
+                                    activityPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                                }
+                            }
+                        }
+
+                        // Single reliable trigger for data sync
+                        LaunchedEffect(isSignedIn, hasPermission) {
+                            if (isSignedIn && hasPermission && !isSyncTriggered && signInError == null) {
+                                viewModel.syncAllData()
+                                isSyncTriggered = true
                             }
                         }
                     }
                     composable("history/{metricType}") { backStackEntry ->
                         val metricType = MetricType.valueOf(backStackEntry.arguments?.getString("metricType") ?: "STEPS")
                         MetricHistoryScreen(metricType = metricType, navController = navController, viewModel = viewModel)
+                    }
+                    composable("activityHistory") {
+                        ActivityHistoryScreen(navController = navController, viewModel = viewModel)
                     }
                 }
             }
@@ -260,7 +329,9 @@ fun Dashboard(state: DashboardState, navController: NavController) {
             Spacer(modifier = Modifier.height(24.dp))
             SectionTitle(title = "Last Activity", icon = Icons.Default.History)
             Spacer(modifier = Modifier.height(16.dp))
-            LastActivityCard(activity = state.lastActivity, time = state.lastActivityTime)
+            LastActivityCard(activity = state.lastActivity, time = state.lastActivityTime) {
+                navController.navigate("activityHistory")
+            }
         }
         item {
             Spacer(modifier = Modifier.height(24.dp))
@@ -338,9 +409,9 @@ fun HealthSummaryCard(metric: HealthMetric, onClick: () -> Unit) {
 }
 
 @Composable
-fun LastActivityCard(activity: String, time: String) {
+fun LastActivityCard(activity: String, time: String, onClick: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
     ) {

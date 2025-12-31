@@ -1,6 +1,7 @@
 package com.tharun.vitalsync.health
 
 import android.content.Context
+import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.fitness.Fitness
 import com.google.android.gms.fitness.data.DataType
@@ -47,65 +48,47 @@ class GoogleFitManager(private val context: Context) {
     suspend fun readHistoricalData(startTime: Long, endTime: Long, metricType: MetricType): List<HealthData> {
         val account = getGoogleAccount() ?: throw IllegalStateException("Google Fit account not signed in.")
 
-        val readRequest: DataReadRequest
+        val (dataType, field) = getDataType(metricType)
 
-        if (metricType == MetricType.STEPS) {
-            readRequest = DataReadRequest.Builder()
-                .aggregate(DataType.TYPE_STEP_COUNT_DELTA, DataType.AGGREGATE_STEP_COUNT_DELTA)
-                .bucketByTime(30, TimeUnit.MINUTES)
-                .setTimeRange(startTime, endTime, TimeUnit.MILLISECONDS)
-                .build()
-        } else {
-            val (dataType, _) = getDataType(metricType)
-            readRequest = DataReadRequest.Builder()
-                .read(dataType)
-                .setTimeRange(startTime, endTime, TimeUnit.MILLISECONDS)
-                .build()
-        }
+        val readRequest = DataReadRequest.Builder()
+            .read(dataType)
+            .setTimeRange(startTime, endTime, TimeUnit.MILLISECONDS)
+            .build()
 
         val response = Fitness.getHistoryClient(context, account).readData(readRequest).await()
-
-        if (metricType == MetricType.STEPS) {
-            return response.buckets.flatMap { bucket ->
-                bucket.dataSets.map { dataSet ->
-                    val totalSteps = dataSet.dataPoints.firstOrNull()?.getValue(Field.FIELD_STEPS)?.asInt() ?: 0
-                    HealthData(
-                        userId = account.id!!,
-                        timestamp = bucket.getStartTime(TimeUnit.MILLISECONDS),
-                        steps = totalSteps,
-                        heartRate = null, calories = null, distance = null, sleepDuration = null, activityType = null, heartPoints = null
-                    )
-                }
-            }
-        }
-
-        val (dataType, field) = getDataType(metricType)
         val dataPoints = response.getDataSet(dataType).dataPoints
 
-        return dataPoints.map { dataPoint ->
-            val timestamp = dataPoint.getStartTime(TimeUnit.MILLISECONDS)
-            val value = dataPoint.getValue(field)
-            HealthData(
-                userId = account.id!!,
-                timestamp = timestamp,
-                heartRate = if (metricType == MetricType.HEART_RATE) value.asFloat() else null,
-                steps = null, // Steps are handled above
-                calories = if (metricType == MetricType.CALORIES) value.asFloat() else null,
-                distance = if (metricType == MetricType.DISTANCE) value.asFloat() / 1000f else null,
-                sleepDuration = if (metricType == MetricType.SLEEP) (dataPoint.getEndTime(TimeUnit.MILLISECONDS) - dataPoint.getStartTime(TimeUnit.MILLISECONDS)) / 60000 else null,
-                activityType = null,
-                heartPoints = null
-            )
+        return dataPoints.mapNotNull { dataPoint ->
+            try {
+                val timestamp = dataPoint.getStartTime(TimeUnit.MILLISECONDS)
+                val activityType = if (metricType == MetricType.ACTIVITY) dataPoint.getValue(field).asActivity() else null
+                HealthData(
+                    userId = account.id!!,
+                    timestamp = timestamp,
+                    heartRate = if (metricType == MetricType.HEART_RATE) dataPoint.getValue(field).asFloat() else null,
+                    steps = if (metricType == MetricType.STEPS) dataPoint.getValue(field).asInt() else null,
+                    calories = if (metricType == MetricType.CALORIES) dataPoint.getValue(field).asFloat() else null,
+                    distance = if (metricType == MetricType.DISTANCE) dataPoint.getValue(field).asFloat() / 1000f else null,
+                    sleepDuration = if (metricType == MetricType.SLEEP) (dataPoint.getEndTime(TimeUnit.MILLISECONDS) - dataPoint.getStartTime(TimeUnit.MILLISECONDS)) / 60000 else null,
+                    activityType = activityType,
+                    heartPoints = null
+                )
+            } catch (e: Exception) {
+                Log.e("GoogleFitManager", "Error processing data point for $metricType", e)
+                null
+            }
         }
     }
 
     private fun getDataType(metricType: MetricType): Pair<DataType, Field> {
         return when (metricType) {
             MetricType.HEART_RATE -> DataType.TYPE_HEART_RATE_BPM to Field.FIELD_BPM
-            MetricType.STEPS -> DataType.AGGREGATE_STEP_COUNT_DELTA to Field.FIELD_STEPS
+            MetricType.STEPS -> DataType.TYPE_STEP_COUNT_DELTA to Field.FIELD_STEPS // Use per-interval steps
             MetricType.CALORIES -> DataType.AGGREGATE_CALORIES_EXPENDED to Field.FIELD_CALORIES
             MetricType.DISTANCE -> DataType.AGGREGATE_DISTANCE_DELTA to Field.FIELD_DISTANCE
             MetricType.SLEEP -> DataType.TYPE_SLEEP_SEGMENT to Field.FIELD_SLEEP_SEGMENT_TYPE
+            MetricType.ACTIVITY -> DataType.TYPE_ACTIVITY_SEGMENT to Field.FIELD_ACTIVITY
+            MetricType.HEART_POINTS -> DataType.TYPE_HEART_POINTS to Field.FIELD_INTENSITY
             else -> throw IllegalArgumentException("Unsupported metric type: $metricType")
         }
     }

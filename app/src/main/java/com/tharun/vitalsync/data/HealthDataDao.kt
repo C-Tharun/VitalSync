@@ -24,4 +24,6 @@ interface HealthDataDao {
     // New queries for history screen
     @Query("SELECT * FROM health_data WHERE userId = :userId AND timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp DESC")
     fun getDataForRange(userId: String, startTime: Long, endTime: Long): Flow<List<HealthData>>
+    @Query("SELECT * FROM health_data WHERE userId = :userId AND activityType IS NOT NULL AND timestamp BETWEEN :startTime AND :endTime ORDER BY timestamp DESC")
+    fun getActivityHistoryForRange(userId: String, startTime: Long, endTime: Long): Flow<List<HealthData>>
 }
