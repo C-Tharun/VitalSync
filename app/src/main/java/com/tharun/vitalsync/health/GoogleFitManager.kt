@@ -67,13 +67,16 @@ class GoogleFitManager(private val context: Context) {
         return dataPoints.map {
             val timestamp = it.getStartTime(TimeUnit.MILLISECONDS)
             val value = it.getValue(field)
+
+            val distanceInKm = if (metricType == MetricType.DISTANCE) value.asFloat() / 1000f else null
+
             HealthData(
                 userId = account.id!!,
                 timestamp = timestamp,
                 heartRate = if (metricType == MetricType.HEART_RATE) value.asFloat() else null,
                 steps = if (metricType == MetricType.STEPS) value.asInt() else null,
                 calories = if (metricType == MetricType.CALORIES) value.asFloat() else null,
-                distance = if (metricType == MetricType.DISTANCE) value.asFloat() else null,
+                distance = distanceInKm,
                 sleepDuration = if (metricType == MetricType.SLEEP) (it.getEndTime(TimeUnit.MILLISECONDS) - it.getStartTime(TimeUnit.MILLISECONDS)) / 60000 else null,
                 activityType = null,
                 heartPoints = null

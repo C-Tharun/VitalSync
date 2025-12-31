@@ -26,7 +26,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _userName = MutableStateFlow("User")
 
     // For History Screen
-    private val _historyQuery = MutableStateFlow<Pair<MetricType, String>?>(null)
+    private val _historyQuery = MutableStateFlow<Pair<MetricType, Long>?>(null)
 
     val state: StateFlow<DashboardState> = _userId.flatMapLatest { userId ->
         if (userId != null) {
@@ -55,124 +55,128 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardState())
 
-    val historyState: StateFlow<List<HealthData>> = _historyQuery
+    private val rawHistoryDataFlow: Flow<List<HealthData>> = _historyQuery
         .filterNotNull()
         .combine(_userId.filterNotNull()) { query, userId ->
-            val (metricType, timeRange) = query
-            val now = System.currentTimeMillis()
-            val startTime = when (timeRange) {
-                "Today" -> now - TimeUnit.DAYS.toMillis(1)
-                "7 Days" -> now - TimeUnit.DAYS.toMillis(7)
-                "30 Days" -> now - TimeUnit.DAYS.toMillis(30)
-                else -> now - TimeUnit.DAYS.toMillis(1)
-            }
+            val (metricType, selectedDate) = query
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = selectedDate
+            cal.set(Calendar.HOUR_OF_DAY, 0)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val startTime = cal.timeInMillis
+            cal.add(Calendar.DATE, 1)
+            val endTime = cal.timeInMillis
 
-            // In a separate coroutine, trigger a sync from the network. This won't block the UI.
             viewModelScope.launch {
                 try {
-                    repository.syncHistoricalData(userId, startTime, now, metricType)
+                    repository.syncHistoricalData(userId, startTime, endTime, metricType)
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to sync history for $metricType", e)
                 }
             }
 
-            // Immediately return the flow that observes the database.
-            repository.getHealthDataForRange(userId, startTime, now)
+            repository.getHealthDataForRange(userId, startTime, endTime)
         }
-        .flatMapLatest { it } // Flatten the Flow<Flow<List<HealthData>>> to Flow<List<HealthData>>
+        .flatMapLatest { it }
+
+    val heartRateHistory: StateFlow<HeartRateHistoryState> = rawHistoryDataFlow
+        .map { data ->
+            if (_historyQuery.value?.first != MetricType.HEART_RATE) return@map HeartRateHistoryState()
+
+            val filteredData = data.filter { it.heartRate != null }
+
+            if (filteredData.isEmpty()) {
+                return@map HeartRateHistoryState()
+            }
+
+            val dailyMin = filteredData.minOf { it.heartRate!! }
+            val dailyMax = filteredData.maxOf { it.heartRate!! }
+            val dailySummary = HeartRateDailySummary(min = dailyMin, max = dailyMax)
+
+            val hourlyData = filteredData
+                .groupBy { TimeUnit.MILLISECONDS.toHours(it.timestamp) }
+                .map { (hour, group) ->
+                    val min = group.minOf { it.heartRate!! }
+                    val max = group.maxOf { it.heartRate!! }
+                    HourlyHeartRateData(
+                        timestamp = TimeUnit.HOURS.toMillis(hour),
+                        min = min,
+                        max = max
+                    )
+                }
+                .sortedBy { it.timestamp }
+
+            val rawData = filteredData
+                .groupBy { TimeUnit.MILLISECONDS.toMinutes(it.timestamp) }
+                .map { (_, group) -> group.first() } // Take the first data point for each minute
+                .sortedByDescending { it.timestamp }
+
+            HeartRateHistoryState(
+                dailySummary = dailySummary,
+                hourlyData = hourlyData,
+                rawData = rawData
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HeartRateHistoryState())
+
+    val historyState: StateFlow<List<HealthData>> = rawHistoryDataFlow
         .map { data ->
             val metricType = _historyQuery.value?.first
-            if (metricType == null) return@map emptyList<HealthData>()
+            if (metricType == null || metricType == MetricType.HEART_RATE) return@map emptyList<HealthData>()
 
             val filteredData = data.filter {
                 when (metricType) {
-                    MetricType.HEART_RATE -> it.heartRate != null
                     MetricType.STEPS -> it.steps != null
                     MetricType.CALORIES -> it.calories != null
                     MetricType.DISTANCE -> it.distance != null
                     MetricType.SLEEP -> it.sleepDuration != null
-                    MetricType.HEART_POINTS -> false // Heart points are disabled
+                    else -> false
                 }
             }
 
             when (metricType) {
-                MetricType.HEART_RATE -> {
+                MetricType.DISTANCE, MetricType.CALORIES, MetricType.STEPS -> {
                     filteredData
-                        .groupBy { TimeUnit.MILLISECONDS.toMinutes(it.timestamp) }
-                        .map { (minute, group) ->
-                            val avgHeartRate = group.mapNotNull { it.heartRate }.average().toFloat()
-                            group.first().copy(
-                                heartRate = avgHeartRate,
-                                timestamp = TimeUnit.MINUTES.toMillis(minute) // Use the start of the minute as the timestamp
+                        .groupBy { TimeUnit.MILLISECONDS.toHours(it.timestamp) }
+                        .map { (hour, group) ->
+                            val totalSteps = group.sumOf { it.steps ?: 0 }
+                            val totalDistance = group.sumOf { it.distance?.toDouble() ?: 0.0 }.toFloat()
+                            val totalCalories = group.sumOf { it.calories?.toDouble() ?: 0.0 }.toFloat()
+                            HealthData(
+                                userId = group.first().userId,
+                                steps = if (metricType == MetricType.STEPS) totalSteps else null,
+                                distance = if (metricType == MetricType.DISTANCE) totalDistance else null,
+                                calories = if (metricType == MetricType.CALORIES) totalCalories else null,
+                                timestamp = TimeUnit.HOURS.toMillis(hour),
+                                heartRate = null, sleepDuration = null, activityType = null, heartPoints = null
                             )
                         }
                 }
-                MetricType.DISTANCE -> {
-                    val timeRange = _historyQuery.value?.second
-                    if (timeRange == "Today") {
-                        // Aggregate by hour for "Today"
-                        filteredData
-                            .groupBy { TimeUnit.MILLISECONDS.toHours(it.timestamp) }
-                            .map { (hour, group) ->
-                                val totalDistance = group.sumOf { it.distance?.toDouble() ?: 0.0 }.toFloat()
-                                group.first().copy(
-                                    distance = totalDistance,
-                                    timestamp = TimeUnit.HOURS.toMillis(hour)
-                                )
-                            }
-                    } else {
-                        // Aggregate by day for "7 Days" and "30 Days"
-                        filteredData
-                            .groupBy { TimeUnit.MILLISECONDS.toDays(it.timestamp) }
-                            .map { (day, group) ->
-                                val totalDistance = group.sumOf { it.distance?.toDouble() ?: 0.0 }.toFloat()
-                                group.first().copy(
-                                    distance = totalDistance,
-                                    timestamp = TimeUnit.DAYS.toMillis(day)
-                                )
-                            }
-                    }
-                }
                 MetricType.SLEEP -> {
                     filteredData
-                        .groupBy { 
+                        .groupBy {
                             val cal = Calendar.getInstance()
                             cal.timeInMillis = it.timestamp
-                            // We consider a "night" to be from noon to noon.
-                            // So if sleep is recorded before noon, it belongs to the previous day's night.
                             if (cal.get(Calendar.HOUR_OF_DAY) < 12) {
                                 cal.add(Calendar.DATE, -1)
                             }
-                            // Reset to midnight for consistent grouping, represents the start of the day.
                             cal.set(Calendar.HOUR_OF_DAY, 0)
                             cal.set(Calendar.MINUTE, 0)
                             cal.set(Calendar.SECOND, 0)
                             cal.set(Calendar.MILLISECOND, 0)
                             cal.timeInMillis
-                         }
+                        }
                         .map { (nightTimestamp, group) ->
                             val totalSleep = group.sumOf { it.sleepDuration?.toInt() ?: 0 }
-                            // We can take the first entry from the group for other details, but update the key properties
                             group.first().copy(
                                 sleepDuration = totalSleep.toLong(),
                                 timestamp = nightTimestamp
                             )
                         }
                 }
-                MetricType.STEPS -> {
-                    filteredData
-                        .groupBy { TimeUnit.MILLISECONDS.toDays(it.timestamp) }
-                        .map { (day, group) ->
-                            val totalSteps = group.sumOf { it.steps ?: 0 }
-                            group.first().copy(
-                                steps = totalSteps,
-                                timestamp = TimeUnit.DAYS.toMillis(day)
-                            )
-                        }
-                }
-                else -> {
-                    filteredData
-                }
+                else -> filteredData
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -191,12 +195,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadHistory(metricType: MetricType, timeRange: String) {
-        if (metricType == MetricType.SLEEP && timeRange == "Today") {
-            _historyQuery.value = metricType to "7 Days"
-        } else {
-            _historyQuery.value = metricType to timeRange
-        }
+    fun loadHistory(metricType: MetricType, selectedDate: Long) {
+        _historyQuery.value = metricType to selectedDate
     }
 
     private fun getWeeklyData(data: List<HealthData>, format: String, valueSelector: (HealthData) -> Float): List<Pair<String, Float>> {
@@ -204,7 +204,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val today = cal.get(Calendar.DAY_OF_YEAR)
         val currentYear = cal.get(Calendar.YEAR)
 
-        return data.filter { 
+        return data.filter {
             cal.timeInMillis = it.timestamp
             cal.get(Calendar.YEAR) == currentYear && cal.get(Calendar.DAY_OF_YEAR) > today - 7
         }.groupBy {
@@ -215,3 +215,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.map { it.key to it.value }
     }
 }
+
+data class HeartRateHistoryState(
+    val dailySummary: HeartRateDailySummary? = null,
+    val hourlyData: List<HourlyHeartRateData> = emptyList(),
+    val rawData: List<HealthData> = emptyList()
+)
+
+data class HeartRateDailySummary(
+    val min: Float,
+    val max: Float
+)
+
+data class HourlyHeartRateData(
+    val timestamp: Long,
+    val min: Float,
+    val max: Float
+)
