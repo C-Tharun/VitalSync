@@ -164,9 +164,21 @@ fun MetricHistoryScreen(
                             Text("No sleep data available for this period.")
                         }
                     } else {
+                        // Filter for selected date
+                        val cal = Calendar.getInstance()
+                        cal.timeInMillis = selectedDate
+                        cal.set(Calendar.HOUR_OF_DAY, 0)
+                        cal.set(Calendar.MINUTE, 0)
+                        cal.set(Calendar.SECOND, 0)
+                        cal.set(Calendar.MILLISECOND, 0)
+                        val dayStart = cal.timeInMillis
+                        cal.add(Calendar.DATE, 1)
+                        val dayEnd = cal.timeInMillis
+                        val selectedDateSleepData = historyData.filter { it.timestamp in dayStart until dayEnd }
                         LazyColumn {
                             item {
-                                Text("Total Sleep: ${totalSleep / 60}h ${totalSleep % 60}m", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                                val selectedTotalSleep = selectedDateSleepData.sumOf { it.sleepDuration?.toInt() ?: 0 }
+                                Text("Total Sleep: ${selectedTotalSleep / 60}h ${selectedTotalSleep % 60}m", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(16.dp))
                             }
                             item {
@@ -206,7 +218,7 @@ fun MetricHistoryScreen(
                                     Spacer(modifier = Modifier.height(16.dp))
                                 }
                             }
-                            items(historyData) { data ->
+                            items(selectedDateSleepData) { data ->
                                 Row(modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 12.dp)) {

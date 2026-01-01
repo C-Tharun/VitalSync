@@ -275,7 +275,171 @@ fun AppScreen(
 }
 
 @Composable
+fun MultiMetricHeartRings(
+    steps: Float,
+    stepsGoal: Float,
+    kcal: Float,
+    kcalGoal: Float,
+    distance: Float,
+    distanceGoal: Float,
+    onGoalsChange: (Float, Float, Float) -> Unit
+) {
+    var showGoalDialog by remember { mutableStateOf(false) }
+    if (showGoalDialog) {
+        var stepsInput by remember { mutableStateOf(stepsGoal.toInt().toString()) }
+        var kcalInput by remember { mutableStateOf(kcalGoal.toInt().toString()) }
+        var distanceInput by remember { mutableStateOf(distanceGoal.toInt().toString()) }
+        AlertDialog(
+            onDismissRequest = { showGoalDialog = false },
+            title = { Text("Set Daily Goals") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = stepsInput,
+                        onValueChange = { stepsInput = it.filter { c -> c.isDigit() } },
+                        label = { Text("Steps Goal") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = kcalInput,
+                        onValueChange = { kcalInput = it.filter { c -> c.isDigit() } },
+                        label = { Text("Kcal Goal") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = distanceInput,
+                        onValueChange = { distanceInput = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Distance Goal (km)") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val s = stepsInput.toFloatOrNull()
+                    val k = kcalInput.toFloatOrNull()
+                    val d = distanceInput.toFloatOrNull()
+                    if (s != null && k != null && d != null && s > 0 && k > 0 && d > 0) {
+                        onGoalsChange(s, k, d)
+                        showGoalDialog = false
+                    }
+                }) { Text("Set") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoalDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+    val stepsProgress = (steps / stepsGoal).coerceIn(0f, 1f)
+    val kcalProgress = (kcal / kcalGoal).coerceIn(0f, 1f)
+    val distanceProgress = (distance / distanceGoal).coerceIn(0f, 1f)
+    val ringColors = listOf(StepCountPurple, ActivityRingRed, StepDistanceCyan)
+    val ringProgress = listOf(stepsProgress, kcalProgress, distanceProgress)
+    val ringWidths = listOf(32f, 22f, 12f)
+    val ringValues = listOf(steps, kcal, distance)
+    val ringGoals = listOf(stepsGoal, kcalGoal, distanceGoal)
+    val ringUnits = listOf("steps", "kcal", "km")
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp)
+            .clickable { showGoalDialog = true },
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(150.dp)) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val width = size.width
+                    val height = size.height
+                    // Calculate the max stroke width and spacing
+                    val baseStroke = 32f
+                    val gap = 8f
+                    val strokes = listOf(baseStroke, baseStroke - 10f, baseStroke - 20f)
+                    // Calculate scale for each ring so that the outer edge of each ring is spaced by 'gap'
+                    fun scaleForRing(ringIndex: Int): Float {
+                        val outer = baseStroke / 2 + ringIndex * (gap + 10f)
+                        val maxDim = width.coerceAtMost(height)
+                        return (maxDim - 2 * outer) / maxDim
+                    }
+                    for (i in 0..2) {
+                        val scale = scaleForRing(i)
+                        val stroke = strokes[i]
+                        // Draw background
+                        val bgPath = heartPath(width, height, scale)
+                        drawPath(bgPath, color = Color.DarkGray.copy(alpha = 0.3f), style = Stroke(width = stroke))
+                        // Draw progress
+                        if (ringProgress[i] > 0f) {
+                            val path = heartPath(width, height, scale)
+                            val pathMeasure = androidx.compose.ui.graphics.PathMeasure()
+                            pathMeasure.setPath(path, false)
+                            val length = pathMeasure.length
+                            val progressPath = androidx.compose.ui.graphics.Path()
+                            pathMeasure.getSegment(0f, length * ringProgress[i], progressPath, true)
+                            drawPath(progressPath, color = ringColors[i], style = Stroke(width = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                        }
+                    }
+                }
+                Icon(
+                    Icons.Default.Favorite,
+                    contentDescription = "Daily Goal",
+                    tint = ActivityRingRed,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(24.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Daily Goal", style = MaterialTheme.typography.titleLarge)
+                for (i in 0..2) {
+                    Text(
+                        text = "${ringValues[i].toInt()}/${ringGoals[i].toInt()} ${ringUnits[i]}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = ringColors[i]
+                    )
+                }
+                Text(
+                    text = "Tap to set goals",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+fun heartPath(width: Float, height: Float, scale: Float): androidx.compose.ui.graphics.Path {
+    val w = width * scale
+    val h = height * scale
+    val dx = (width - w) / 2
+    val dy = (height - h) / 2
+    return androidx.compose.ui.graphics.Path().apply {
+        moveTo(width / 2, h * 0.8f + dy)
+        cubicTo(
+            w * 1.1f + dx, h * 0.55f + dy,
+            w * 0.8f + dx, h * 0.1f + dy,
+            width / 2, h * 0.3f + dy
+        )
+        cubicTo(
+            w * 0.2f + dx, h * 0.1f + dy,
+            -w * 0.1f + dx, h * 0.55f + dy,
+            width / 2, h * 0.8f + dy
+        )
+        close()
+    }
+}
+
+@Composable
 fun Dashboard(state: DashboardState, navController: NavController) {
+    var stepsGoal by remember { mutableStateOf(8000f) }
+    var kcalGoal by remember { mutableStateOf(3000f) }
+    var distanceGoal by remember { mutableStateOf(5f) }
+    val steps = state.steps.toFloatOrNull() ?: 0f
+    val kcal = state.calories.toFloatOrNull() ?: 0f
+    val distance = state.distance.toFloatOrNull() ?: 0f
     val summaryMetrics = listOfNotNull(
         HealthMetric(MetricType.STEPS, state.steps, "", Icons.AutoMirrored.Filled.DirectionsWalk, StepCountPurple),
         HealthMetric(MetricType.DISTANCE, state.distance, "km", Icons.Default.Map, StepDistanceCyan),
@@ -283,10 +447,21 @@ fun Dashboard(state: DashboardState, navController: NavController) {
         HealthMetric(MetricType.CALORIES, state.calories, "kcal", Icons.Default.LocalFireDepartment, LightGreen),
         HealthMetric(MetricType.SLEEP, state.sleepDuration, "", Icons.Default.Bedtime, StepCountPurple)
     )
-
     LazyColumn(modifier = Modifier.padding(16.dp)) {
         item {
-            ActivityRing(progress = state.calories.toFloatOrNull() ?: 0f, goal = 3000f)
+            MultiMetricHeartRings(
+                steps = steps,
+                stepsGoal = stepsGoal,
+                kcal = kcal,
+                kcalGoal = kcalGoal,
+                distance = distance,
+                distanceGoal = distanceGoal,
+                onGoalsChange = { s, k, d ->
+                    stepsGoal = s
+                    kcalGoal = k
+                    distanceGoal = d
+                }
+            )
             Spacer(modifier = Modifier.height(24.dp))
         }
         item {
@@ -336,11 +511,52 @@ fun SectionTitle(title: String, icon: ImageVector) {
 }
 
 @Composable
-fun ActivityRing(progress: Float, goal: Float) {
+fun ActivityRing(
+    progress: Float,
+    goal: Float,
+    onGoalChange: (Float) -> Unit
+) {
+    var showGoalDialog by remember { mutableStateOf(false) }
     val progressValue = (progress / goal).coerceIn(0f, 1f)
+    val heartColor = when {
+        progressValue < 0.33f -> Color.Gray
+        progressValue < 0.66f -> Color(0xFFFFA726) // Orange
+        else -> ActivityRingRed
+    }
+
+    if (showGoalDialog) {
+        var input by remember { mutableStateOf(goal.toInt().toString()) }
+        AlertDialog(
+            onDismissRequest = { showGoalDialog = false },
+            title = { Text("Set Daily Calorie Goal") },
+            text = {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it.filter { c -> c.isDigit() } },
+                    label = { Text("KCAL Goal") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val newGoal = input.toFloatOrNull()
+                    if (newGoal != null && newGoal > 0) {
+                        onGoalChange(newGoal)
+                        showGoalDialog = false
+                    }
+                }) { Text("Set") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoalDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     Card(
-        modifier = Modifier.fillMaxWidth().height(200.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(220.dp)
+            .clickable { showGoalDialog = true },
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -350,42 +566,66 @@ fun ActivityRing(progress: Float, goal: Float) {
         ) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(150.dp)) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawArc(
-                        color = Color.DarkGray,
-                        startAngle = 0f,
-                        sweepAngle = 360f,
-                        useCenter = false,
-                        style = Stroke(width = 30f)
-                    )
-                    drawArc(
-                        color = ActivityRingRed,
-                        startAngle = -90f,
-                        sweepAngle = 360 * progressValue,
-                        useCenter = false,
-                        style = Stroke(width = 30f)
-                    )
+                    val width = size.width
+                    val height = size.height
+                    // Heart outline path
+                    val heartPath = androidx.compose.ui.graphics.Path().apply {
+                        moveTo(width / 2, height * 0.8f)
+                        cubicTo(
+                            width * 1.1f, height * 0.55f,
+                            width * 0.8f, height * 0.1f,
+                            width / 2, height * 0.3f
+                        )
+                        cubicTo(
+                            width * 0.2f, height * 0.1f,
+                            -width * 0.1f, height * 0.55f,
+                            width / 2, height * 0.8f
+                        )
+                        close()
+                    }
+                    // Draw background heart
+                    drawPath(heartPath, color = Color.LightGray, style = Stroke(width = 8f))
+
+                    // Draw filled heart up to progress height
+                    if (progressValue > 0f) {
+                        val fillHeight = height * (1f - progressValue)
+                        val fillRect = androidx.compose.ui.geometry.Rect(0f, fillHeight, width, height)
+                        val fillPath = androidx.compose.ui.graphics.Path().apply {
+                            addRect(fillRect)
+                        }
+                        // Intersect the fill rect and heart path
+                        val filledHeartPath = androidx.compose.ui.graphics.Path()
+                        filledHeartPath.op(heartPath, fillPath, androidx.compose.ui.graphics.PathOperation.Intersect)
+                        drawPath(filledHeartPath, color = heartColor)
+                    }
+                    // Draw heart outline again for clarity
+                    drawPath(heartPath, color = Color.LightGray, style = Stroke(width = 8f))
                 }
                 Icon(
-                    Icons.Default.ArrowForward,
+                    Icons.Default.Favorite,
                     contentDescription = "Move",
-                    tint = ActivityRingRed,
+                    tint = heartColor,
                     modifier = Modifier.size(40.dp)
                 )
             }
             Spacer(modifier = Modifier.width(24.dp))
-            Column {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Move", style = MaterialTheme.typography.titleLarge)
                 Text(
                     text = "${progress.toInt()}/${goal.toInt()} KCAL",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
-                    color = ActivityRingRed
+                    color = heartColor
+                )
+                Text(
+                    text = "Goal",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
     }
 }
-
 
 @Composable
 fun NewHealthSummaryCard(metric: HealthMetric, onClick: () -> Unit) {
