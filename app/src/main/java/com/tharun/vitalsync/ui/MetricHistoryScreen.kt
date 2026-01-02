@@ -41,6 +41,8 @@ import com.tharun.vitalsync.ui.theme.rememberChartStyle
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,8 +56,33 @@ fun MetricHistoryScreen(
     val stepsHistory by viewModel.stepsHistory.collectAsState()
     var selectedDate by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // --- Google Fit direct fetch for sleep ---
+    var googleFitSleepData by remember { mutableStateOf<List<HealthData>?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+    val dashboardState by viewModel.state.collectAsState()
+    val userId = dashboardState.userName // Use userName as fallback if userId is not exposed
+
     LaunchedEffect(metricType, selectedDate) {
         viewModel.loadHistory(metricType, selectedDate)
+        if (metricType == MetricType.SLEEP) {
+            // Calculate start and end of the selected day
+            val cal = Calendar.getInstance()
+            cal.timeInMillis = selectedDate
+            cal.set(Calendar.HOUR_OF_DAY, 0)
+            cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val dayStart = cal.timeInMillis
+            cal.add(Calendar.DATE, 1)
+            val dayEnd = cal.timeInMillis
+            // Fetch directly from Google Fit
+            coroutineScope.launch {
+                val fitData = viewModel.fetchSleepDataFromGoogleFitForDay(userId, dayStart, dayEnd)
+                googleFitSleepData = fitData
+            }
+        } else {
+            googleFitSleepData = null
+        }
     }
 
     Scaffold(
@@ -158,39 +185,57 @@ fun MetricHistoryScreen(
                     }
                 }
                 MetricType.SLEEP -> {
-                    val totalSleep = historyData.sumOf { it.sleepDuration?.toInt() ?: 0 }
-                    if (totalSleep == 0 && historyData.isEmpty()) {
+                    val cal = Calendar.getInstance()
+                    cal.timeInMillis = selectedDate
+                    cal.set(Calendar.HOUR_OF_DAY, 0)
+                    cal.set(Calendar.MINUTE, 0)
+                    cal.set(Calendar.SECOND, 0)
+                    cal.set(Calendar.MILLISECOND, 0)
+                    val dayStart = cal.timeInMillis
+                    cal.add(Calendar.DATE, 1)
+                    val dayEnd = cal.timeInMillis
+
+                    val sleepData = googleFitSleepData ?: historyData
+                    val selectedDateSleepData = sleepData.filter { data ->
+                        val sleepStart = data.timestamp
+                        val sleepEnd = data.timestamp + (data.sleepDuration ?: 0L) * 60 * 1000
+                        sleepStart < dayEnd && sleepEnd > dayStart
+                    }
+                    val selectedTotalSleep = selectedDateSleepData.sumOf { overlapMinutes(it, dayStart, dayEnd) }
+
+                    if (selectedTotalSleep == 0 && selectedDateSleepData.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text("No sleep data available for this period.")
                         }
                     } else {
-                        // Filter for selected date
-                        val cal = Calendar.getInstance()
-                        cal.timeInMillis = selectedDate
-                        cal.set(Calendar.HOUR_OF_DAY, 0)
-                        cal.set(Calendar.MINUTE, 0)
-                        cal.set(Calendar.SECOND, 0)
-                        cal.set(Calendar.MILLISECOND, 0)
-                        val dayStart = cal.timeInMillis
-                        cal.add(Calendar.DATE, 1)
-                        val dayEnd = cal.timeInMillis
-                        val selectedDateSleepData = historyData.filter { it.timestamp in dayStart until dayEnd }
                         LazyColumn {
                             item {
-                                val selectedTotalSleep = selectedDateSleepData.sumOf { it.sleepDuration?.toInt() ?: 0 }
                                 Text("Total Sleep: ${selectedTotalSleep / 60}h ${selectedTotalSleep % 60}m", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(16.dp))
                             }
                             item {
-                                if (historyData.isNotEmpty()) {
-                                    val chartModelProducer = ChartEntryModelProducer(historyData.mapIndexed { index, data ->
-                                        entryOf(index.toFloat(), (data.sleepDuration?.toFloat() ?: 0f) / 60f) // hours
-                                    })
+                                if (sleepData.isNotEmpty()) {
+                                    val groupedByNight = sleepData.groupBy { data ->
+                                        val nightCal = Calendar.getInstance()
+                                        nightCal.timeInMillis = data.timestamp
+                                        if (nightCal.get(Calendar.HOUR_OF_DAY) < 12) {
+                                            nightCal.add(Calendar.DATE, -1)
+                                        }
+                                        nightCal.set(Calendar.HOUR_OF_DAY, 12)
+                                        nightCal.set(Calendar.MINUTE, 0)
+                                        nightCal.set(Calendar.SECOND, 0)
+                                        nightCal.set(Calendar.MILLISECOND, 0)
+                                        nightCal.timeInMillis
+                                    }
+                                    val chartEntries = groupedByNight.entries.sortedBy { it.key }.mapIndexed { index, entry ->
+                                        entryOf(index.toFloat(), (entry.value.sumOf { it.sleepDuration?.toDouble() ?: 0.0 } / 60.0).toFloat())
+                                    }
+                                    val chartModelProducer = ChartEntryModelProducer(chartEntries)
                                     val bottomAxisValueFormatter = AxisValueFormatter<AxisPosition.Horizontal.Bottom> { value, _ ->
                                         try {
-                                            val dataPoint = historyData[value.toInt()]
-                                            SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(dataPoint.timestamp))
-                                        } catch (_: IndexOutOfBoundsException) {
+                                            val nightMillis = groupedByNight.keys.sorted()[value.toInt()]
+                                            SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(nightMillis))
+                                        } catch (_: Exception) {
                                             ""
                                         }
                                     }
@@ -201,36 +246,38 @@ fun MetricHistoryScreen(
                                                 lines = listOf(
                                                     LineChart.LineSpec(
                                                         lineColor = primaryColor.toArgb(),
+                                                        lineThicknessDp = 3f,
                                                         lineBackgroundShader = verticalGradient(
-                                                            arrayOf(
-                                                                primaryColor.copy(alpha = 0.5f),
-                                                                primaryColor.copy(alpha = 0f)
-                                                            )
+                                                            arrayOf(primaryColor.copy(alpha = 0.2f), Color.Transparent),
+                                                            null
                                                         )
                                                     )
                                                 )
                                             ),
-                                            chartModelProducer = chartModelProducer,
+                                            model = chartModelProducer.getModel()!!,
                                             startAxis = rememberStartAxis(),
                                             bottomAxis = rememberBottomAxis(valueFormatter = bottomAxisValueFormatter)
                                         )
                                     }
-                                    Spacer(modifier = Modifier.height(16.dp))
                                 }
                             }
                             items(selectedDateSleepData) { data ->
+                                val sleepStart = data.timestamp
+                                val overlap = overlapMinutes(data, dayStart, dayEnd)
                                 Row(modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 12.dp)) {
-                                    val format = "EEE, d MMM"
                                     Text(
-                                        text = SimpleDateFormat(format, Locale.getDefault()).format(Date(data.timestamp)),
+                                        text = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(sleepStart)),
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                                     )
                                     Spacer(modifier = Modifier.weight(1f))
-                                    val valueText = data.sleepDuration?.let { "${it / 60}h ${it % 60}m" } ?: ""
-                                    Text(text = valueText, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
+                                    Text(
+                                        text = "${overlap / 60}h ${overlap % 60}m",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
                                 }
                                 HorizontalDivider()
                             }
@@ -282,12 +329,11 @@ fun MetricHistoryScreen(
                                         )
                                     )
                                 ),
-                                chartModelProducer = chartModelProducer,
+                                model = chartModelProducer.getModel()!!,
                                 startAxis = rememberStartAxis(),
                                 bottomAxis = rememberBottomAxis(valueFormatter = bottomAxisValueFormatter)
                             )
-                        }
-
+                        } // <-- Add missing closing braces for ProvideChartStyle and Column
 
                         Spacer(modifier = Modifier.height(16.dp))
 
@@ -473,4 +519,13 @@ fun StepsBarChart(chartData: List<HealthData>) {
             }
         }
     }
+}
+
+// Helper function to calculate overlap in minutes between a sleep session and a day
+fun overlapMinutes(data: HealthData, dayStart: Long, dayEnd: Long): Int {
+    val sleepStart = data.timestamp
+    val sleepEnd = data.timestamp + (data.sleepDuration ?: 0L) * 60 * 1000
+    val overlapStart = maxOf(sleepStart, dayStart)
+    val overlapEnd = minOf(sleepEnd, dayEnd)
+    return if (overlapEnd > overlapStart) ((overlapEnd - overlapStart) / 60000).toInt() else 0
 }

@@ -54,6 +54,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val totalFloorsClimbed = todayData.sumOf { it.floorsClimbed?.toDouble() ?: 0.0 }.toFloat()
                 val totalMoveMinutes = todayData.sumOf { it.moveMinutes ?: 0 }
 
+                // Calculate total sleep for today by summing all sleep sessions overlapping today using overlapMinutes
+                val totalSleepMinutes = getTotalSleepForDate(data)
+
                 DashboardState(
                     userName = _userName.value,
                     heartRate = latestHeartRate?.toString() ?: "--",
@@ -61,7 +64,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     steps = if (totalSteps > 0) totalSteps.toString() else "--",
                     distance = if (totalDistance > 0f) String.format("%.2f", totalDistance) else "--",
                     heartPoints = "0", // Disabled
-                    sleepDuration = latestSleep?.let { "${it / 60}h ${it % 60}m" } ?: "--",
+                    sleepDuration = if (totalSleepMinutes > 0) "${totalSleepMinutes / 60}h ${totalSleepMinutes % 60}m" else "--",
                     lastActivity = lastActivityData?.activityType ?: "None",
                     lastActivityTime = lastActivityData?.timestamp?.let { SimpleDateFormat("EEE, h:mm a", Locale.getDefault()).format(Date(it)) } ?: "",
                     weeklySteps = weeklySteps,
@@ -88,20 +91,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             Long
             val endTime: Long
+            val isToday = Calendar.getInstance().get(Calendar.DAY_OF_YEAR) == cal.get(Calendar.DAY_OF_YEAR) &&
+                    Calendar.getInstance().get(Calendar.YEAR) == cal.get(Calendar.YEAR)
 
             if (metricType == MetricType.SLEEP) {
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0)
-                cal.set(Calendar.MILLISECOND, 0)
-                cal.add(Calendar.DATE, 1) // End of selected day
-                endTime = cal.timeInMillis
-                cal.add(Calendar.DATE, -8) // Start of 7 days before
-                startTime = cal.timeInMillis
+                endTime = if (isToday) {
+                    System.currentTimeMillis()
+                } else {
+                    cal.set(Calendar.HOUR_OF_DAY, 0)
+                    cal.set(Calendar.MINUTE, 0)
+                    cal.set(Calendar.SECOND, 0)
+                    cal.set(Calendar.MILLISECOND, 0)
+                    cal.add(Calendar.DATE, 1) // End of selected day
+                    cal.timeInMillis
+                }
+                val startCal = Calendar.getInstance()
+                startCal.timeInMillis = endTime
+                startCal.add(Calendar.DATE, -7)
+                startTime = startCal.timeInMillis
             } else {
-                val isToday = Calendar.getInstance().get(Calendar.DAY_OF_YEAR) == cal.get(Calendar.DAY_OF_YEAR) &&
-                        Calendar.getInstance().get(Calendar.YEAR) == cal.get(Calendar.YEAR)
-
                 cal.set(Calendar.HOUR_OF_DAY, 0)
                 cal.set(Calendar.MINUTE, 0)
                 cal.set(Calendar.SECOND, 0)
@@ -372,6 +380,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             label to (dailyTotals[dayKey] ?: 0f)
         }
     }
+
+    /**
+     * Fetch sleep data directly from Google Fit for a given day (startMillis to endMillis).
+     * Returns a list of HealthData for sleep sessions overlapping with the day.
+     */
+    suspend fun fetchSleepDataFromGoogleFitForDay(userId: String, startMillis: Long, endMillis: Long): List<HealthData> {
+        return googleFitManager.readHistoricalData(startMillis, endMillis, MetricType.SLEEP)
+    }
+
+    // Helper function to calculate overlap in minutes between a sleep session and a day
+    fun overlapMinutes(data: HealthData, dayStart: Long, dayEnd: Long): Int {
+        val sleepStart = data.timestamp
+        val sleepEnd = data.timestamp + (data.sleepDuration ?: 0L) * 60 * 1000
+        val overlapStart = maxOf(sleepStart, dayStart)
+        val overlapEnd = minOf(sleepEnd, dayEnd)
+        return if (overlapEnd > overlapStart) ((overlapEnd - overlapStart) / 60000).toInt() else 0
+    }
+
+    /**
+     * Returns the total sleep (in minutes) for the given date, using the same logic as the history screen.
+     * If no date is provided, uses today.
+     */
+    fun getTotalSleepForDate(data: List<HealthData>, dateMillis: Long? = null): Int {
+        val cal = Calendar.getInstance()
+        if (dateMillis != null) {
+            cal.timeInMillis = dateMillis
+        }
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val dayStart = cal.timeInMillis
+        cal.add(Calendar.DATE, 1)
+        val dayEnd = cal.timeInMillis
+        return data.filter { it.sleepDuration != null }
+            .sumOf { overlapMinutes(it, dayStart, dayEnd) }
+    }
 }
 
 data class HeartRateHistoryState(
@@ -396,4 +441,6 @@ data class HourlyHeartRateData(
     val min: Float,
     val max: Float
 )
+
+
 

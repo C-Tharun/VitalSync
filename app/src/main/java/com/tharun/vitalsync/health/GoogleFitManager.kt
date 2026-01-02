@@ -14,6 +14,7 @@ import kotlinx.coroutines.tasks.await
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.time.temporal.ChronoUnit
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -145,42 +146,26 @@ class GoogleFitManager(private val context: Context) {
                 .build()
             try {
                 val response = Fitness.getSessionsClient(context, account).readSession(request).await()
-                val sleepSegments = response.sessions.flatMap { session ->
+                return response.sessions.flatMap { session ->
                     response.getDataSet(session).flatMap { dataSet ->
                         dataSet.dataPoints.mapNotNull { dataPoint ->
+                            val sleepStage = try { dataPoint.getValue(Field.FIELD_SLEEP_SEGMENT_TYPE).asInt() } catch (e: Exception) { 0 }
                             val segmentStart = dataPoint.getStartTime(TimeUnit.MILLISECONDS)
                             val segmentEnd = dataPoint.getEndTime(TimeUnit.MILLISECONDS)
                             val duration = segmentEnd - segmentStart
+
                             if (duration > 0) {
-                                val nightCal = Calendar.getInstance()
-                                nightCal.timeInMillis = segmentStart
-                                if (nightCal.get(Calendar.HOUR_OF_DAY) < 18) {
-                                    nightCal.add(Calendar.DATE, -1)
-                                }
-                                nightCal.set(Calendar.HOUR_OF_DAY, 18)
-                                nightCal.set(Calendar.MINUTE, 0)
-                                nightCal.set(Calendar.SECOND, 0)
-                                nightCal.set(Calendar.MILLISECOND, 0)
-                                val nightKey = nightCal.timeInMillis
-                                Pair(nightKey, duration)
+                                HealthData(
+                                    userId = account.id!!,
+                                    timestamp = segmentStart,
+                                    sleepDuration = TimeUnit.MILLISECONDS.toMinutes(duration),
+                                    activityType = getSleepStageString(sleepStage), // Store sleep stage as a string
+                                    heartRate = null, steps = null, calories = null, distance = null, heartPoints = null
+                                )
                             } else null
                         }
                     }
                 }
-                val sleepByNight = sleepSegments.groupBy({ it.first }, { it.second })
-                return sleepByNight.map { (night, durations) ->
-                    HealthData(
-                        userId = account.id!!,
-                        timestamp = night,
-                        sleepDuration = TimeUnit.MILLISECONDS.toMinutes(durations.sum()),
-                        heartRate = null,
-                        steps = null,
-                        calories = null,
-                        distance = null,
-                        activityType = null,
-                        heartPoints = null
-                    )
-                }.sortedByDescending { it.timestamp }
             } catch (e: Exception) {
                 Log.e("GoogleFitManager", "Error reading sleep sessions", e)
                 return emptyList()
@@ -255,21 +240,57 @@ class GoogleFitManager(private val context: Context) {
         start: Instant,
         end: Instant
     ): Long? {
+        // Use a 36-hour window to capture the entire previous night's sleep
+        val queryStartTime = end.minus(36, ChronoUnit.HOURS).toEpochMilli()
+        val queryEndTime = end.toEpochMilli()
+
         val request = SessionReadRequest.Builder()
             .readSessionsFromAllApps()
             .includeSleepSessions()
             .read(DataType.TYPE_SLEEP_SEGMENT)
-            .setTimeInterval(start.toEpochMilli(), end.toEpochMilli(), TimeUnit.MILLISECONDS)
+            .setTimeInterval(queryStartTime, queryEndTime, TimeUnit.MILLISECONDS)
             .build()
         try {
             val response = Fitness.getSessionsClient(context, account).readSession(request).await()
-            val totalSleepMillis = response.sessions.sumOf { session ->
-                response.getDataSet(session).sumOf { dataSet ->
-                    dataSet.dataPoints.sumOf { dp ->
-                        dp.getEndTime(TimeUnit.MILLISECONDS) - dp.getStartTime(TimeUnit.MILLISECONDS)
-                    }.toDouble()
-                }.toLong()
+            val sleepSegments = response.sessions.flatMap { session ->
+                response.getDataSet(session).flatMap { dataSet ->
+                    dataSet.dataPoints.mapNotNull { dataPoint ->
+                        val sleepStage = try { dataPoint.getValue(Field.FIELD_SLEEP_SEGMENT_TYPE).asInt() } catch (e: Exception) { 0 }
+                        // Only count actual sleep stages (light, deep, REM, and the general 'sleep')
+                        if (sleepStage == 2 || sleepStage in 4..6) {
+                            val segmentStart = dataPoint.getStartTime(TimeUnit.MILLISECONDS)
+                            val duration = dataPoint.getEndTime(TimeUnit.MILLISECONDS) - segmentStart
+                            if (duration > 0) {
+                                // Assign segment to a "night" based on its start time.
+                                // A "night" starts at 6 PM on a given day.
+                                val nightCal = Calendar.getInstance()
+                                nightCal.timeInMillis = segmentStart
+                                if (nightCal.get(Calendar.HOUR_OF_DAY) < 18) {
+                                    // If sleep started before 6 PM, it belongs to the previous day's night.
+                                    nightCal.add(Calendar.DATE, -1)
+                                }
+                                nightCal.set(Calendar.HOUR_OF_DAY, 18)
+                                nightCal.set(Calendar.MINUTE, 0)
+                                nightCal.set(Calendar.SECOND, 0)
+                                nightCal.set(Calendar.MILLISECOND, 0)
+                                val nightKey = nightCal.timeInMillis
+                                Pair(nightKey, duration)
+                            } else null
+                        } else null
+                    }
+                }
             }
+
+            if (sleepSegments.isEmpty()) {
+                return null
+            }
+
+            val sleepByNight = sleepSegments.groupBy({ it.first }, { it.second })
+
+            // Find the most recent night and sum its sleep durations.
+            val mostRecentNightKey = sleepByNight.keys.maxOrNull() ?: return null
+            val totalSleepMillis = sleepByNight[mostRecentNightKey]?.sum() ?: 0L
+
             return if (totalSleepMillis > 0) TimeUnit.MILLISECONDS.toMinutes(totalSleepMillis) else null
         } catch (e: Exception) {
             Log.e("GoogleFitManager", "Error fetching sleep duration using sessions", e)
@@ -290,5 +311,17 @@ class GoogleFitManager(private val context: Context) {
         val lastActivityDataPoint = response.getDataSet(DataType.TYPE_ACTIVITY_SEGMENT).dataPoints.maxByOrNull { it.getEndTime(TimeUnit.MILLISECONDS) }
 
         return lastActivityDataPoint?.getValue(Field.FIELD_ACTIVITY)?.asActivity()
+    }
+
+    private fun getSleepStageString(stage: Int): String {
+        return when (stage) {
+            1 -> "Awake"
+            2 -> "Sleep"
+            3 -> "Out-of-bed"
+            4 -> "Light sleep"
+            5 -> "Deep sleep"
+            6 -> "REM sleep"
+            else -> "Unknown stage"
+        }
     }
 }
