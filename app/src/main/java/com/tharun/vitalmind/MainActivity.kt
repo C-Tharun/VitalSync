@@ -1,4 +1,4 @@
-package com.tharun.vitalsync
+package com.tharun.vitalmind
 
 import android.Manifest
 import android.app.Activity
@@ -62,14 +62,13 @@ import com.patrykandpatrick.vico.core.component.shape.LineComponent
 import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.entryOf
-import com.tharun.vitalsync.ui.ActivityHistoryScreen
-import com.tharun.vitalsync.ui.ConnectScreen
-import com.tharun.vitalsync.ui.DashboardState
-import com.tharun.vitalsync.ui.MainViewModel
-import com.tharun.vitalsync.ui.MetricHistoryScreen
-import com.tharun.vitalsync.ui.MetricType
-import com.tharun.vitalsync.ui.theme.*
-import java.text.SimpleDateFormat
+import com.tharun.vitalmind.ui.ActivityHistoryScreen
+import com.tharun.vitalmind.ui.ConnectScreen
+import com.tharun.vitalmind.ui.DashboardState
+import com.tharun.vitalmind.ui.MainViewModel
+import com.tharun.vitalmind.ui.MetricHistoryScreen
+import com.tharun.vitalmind.ui.MetricType
+import com.tharun.vitalmind.ui.theme.*
 import java.util.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 
@@ -109,7 +108,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            VitalSyncTheme {
+            VitalMindTheme {
                 val context = LocalContext.current
                 val navController = rememberNavController()
                 var signInError by remember { mutableStateOf<String?>(null) }

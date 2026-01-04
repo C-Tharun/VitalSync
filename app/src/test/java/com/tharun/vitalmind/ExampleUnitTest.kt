@@ -1,4 +1,4 @@
-package com.tharun.vitalsync
+package com.tharun.vitalmind
 
 import org.junit.Test
 

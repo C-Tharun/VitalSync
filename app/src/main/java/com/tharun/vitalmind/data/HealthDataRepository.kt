@@ -1,7 +1,7 @@
-package com.tharun.vitalsync.data
+package com.tharun.vitalmind.data
 
-import com.tharun.vitalsync.health.GoogleFitManager
-import com.tharun.vitalsync.ui.MetricType
+import com.tharun.vitalmind.health.GoogleFitManager
+import com.tharun.vitalmind.ui.MetricType
 import kotlinx.coroutines.flow.Flow
 import java.util.Calendar
 

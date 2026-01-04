@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui.theme
+package com.tharun.vitalmind.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

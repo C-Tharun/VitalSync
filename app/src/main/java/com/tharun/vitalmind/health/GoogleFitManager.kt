@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.health
+package com.tharun.vitalmind.health
 
 import android.content.Context
 import android.util.Log
@@ -8,8 +8,8 @@ import com.google.android.gms.fitness.data.DataType
 import com.google.android.gms.fitness.data.Field
 import com.google.android.gms.fitness.request.DataReadRequest
 import com.google.android.gms.fitness.request.SessionReadRequest
-import com.tharun.vitalsync.data.HealthData
-import com.tharun.vitalsync.ui.MetricType
+import com.tharun.vitalmind.data.HealthData
+import com.tharun.vitalmind.ui.MetricType
 import kotlinx.coroutines.tasks.await
 import java.time.Instant
 import java.time.ZoneId

@@ -1,13 +1,13 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.tharun.vitalsync.data.AppDatabase
-import com.tharun.vitalsync.data.HealthData
-import com.tharun.vitalsync.data.HealthDataRepository
-import com.tharun.vitalsync.health.GoogleFitManager
+import com.tharun.vitalmind.data.AppDatabase
+import com.tharun.vitalmind.data.HealthData
+import com.tharun.vitalmind.data.HealthDataRepository
+import com.tharun.vitalmind.health.GoogleFitManager
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch

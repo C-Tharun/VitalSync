@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui.theme
+package com.tharun.vitalmind.ui.theme
 
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
@@ -65,7 +65,7 @@ private val LightColorScheme = lightColorScheme(
 )
 
 @Composable
-fun VitalSyncTheme(
+fun VitalMindTheme(
     darkTheme: Boolean = true, // Forcing dark theme as per new design
     content: @Composable () -> Unit
 ) {

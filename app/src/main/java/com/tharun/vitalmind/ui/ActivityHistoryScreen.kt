@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row

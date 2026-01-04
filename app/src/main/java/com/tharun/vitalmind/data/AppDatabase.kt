@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.data
+package com.tharun.vitalmind.data
 
 import android.content.Context
 import androidx.room.Database

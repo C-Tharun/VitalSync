@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.tharun.vitalsync"
+    namespace = "com.tharun.vitalmind"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.tharun.vitalsync"
+        applicationId = "com.tharun.vitalmind"
         minSdk = 29
         targetSdk = 36
         versionCode = 1

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "VitalSync"
+rootProject.name = "VitalMind"
 include(":app")

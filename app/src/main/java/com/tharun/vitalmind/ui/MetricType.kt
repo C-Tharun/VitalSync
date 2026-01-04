@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 enum class MetricType {
     HEART_RATE,

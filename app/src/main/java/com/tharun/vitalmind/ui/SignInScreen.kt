@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -21,7 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.tharun.vitalsync.R
+import com.tharun.vitalmind.R
 
 @Composable
 fun ConnectScreen(onConnectClick: () -> Unit) {
@@ -57,13 +57,13 @@ fun ConnectScreen(onConnectClick: () -> Unit) {
         ) {
             Icon(
                 painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                contentDescription = "VitalSync Logo",
+                contentDescription = "VitalMind Logo",
                 tint = Color.White,
                 modifier = Modifier.size(120.dp)
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Welcome to VitalSync",
+                text = "Welcome to VitalMind",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,

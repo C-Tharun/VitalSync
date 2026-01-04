@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 data class DashboardState(
     val userName: String = "",

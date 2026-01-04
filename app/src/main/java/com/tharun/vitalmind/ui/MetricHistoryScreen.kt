@@ -1,4 +1,4 @@
-package com.tharun.vitalsync.ui
+package com.tharun.vitalmind.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,8 +36,8 @@ import com.patrykandpatrick.vico.core.component.shape.LineComponent
 import com.patrykandpatrick.vico.core.component.shape.Shapes
 import com.patrykandpatrick.vico.core.entry.ChartEntryModelProducer
 import com.patrykandpatrick.vico.core.entry.entryOf
-import com.tharun.vitalsync.data.HealthData
-import com.tharun.vitalsync.ui.theme.rememberChartStyle
+import com.tharun.vitalmind.data.HealthData
+import com.tharun.vitalmind.ui.theme.rememberChartStyle
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
